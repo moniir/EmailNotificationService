@@ -1,18 +1,23 @@
 package com.example.monir.EmailNotificationService.config;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.ConsumerFactory;
-import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.*;
 import org.springframework.kafka.listener.CommonErrorHandler;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
+import org.springframework.kafka.support.serializer.JacksonJsonSerializer;
+import org.apache.kafka.common.TopicPartition;
 import org.springframework.util.backoff.FixedBackOff;
 
 import java.util.HashMap;
@@ -25,12 +30,14 @@ import java.util.Map;
  * - ErrorHandlingDeserializer wrapper for graceful deserialization error handling
  * - JacksonJsonDeserializer for Spring Boot 4/Spring Kafka 4 compatibility
  * - DefaultErrorHandler with custom retry logic and backoff strategy
+ * - Dead Letter Topic (DLT) for publishing failed messages
  * 
  * ALTERNATIVE: Basic configuration can be achieved via application.properties
  * (see commented properties in application.properties for equivalent config)
  * However, Java configuration is recommended for:
  * - Complex error handling logic
  * - Custom retry strategies
+ * - Dead Letter Topic (DLT) configuration
  * - Programmatic configuration based on environment/conditions
  */
 @Configuration
@@ -61,11 +68,39 @@ public class KafkaConsumerConfiguration {
     }
 
     @Bean
-    public CommonErrorHandler errorHandler() {
-        // Retry 3 times with 1 second delay between retries, then skip the failed record
-        DefaultErrorHandler handler = new DefaultErrorHandler(new FixedBackOff(1000L, 3L));
+    public ProducerFactory<String, Object> producerFactory() {
+        Map<String, Object> config = new HashMap<>();
+        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, environment.getProperty("spring.kafka.consumer.bootstrap-servers"));
+        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JacksonJsonSerializer.class);
+        return new DefaultKafkaProducerFactory<>(config);
+    }
+
+    @Bean
+    public KafkaTemplate<String, Object> kafkaTemplate(ProducerFactory<String, Object> producerFactory) {
+        return new KafkaTemplate<>(producerFactory);
+    }
+
+    @Bean
+    public CommonErrorHandler errorHandler(KafkaTemplate<String, Object> kafkaTemplate) {
+        // Dead Letter Publishing Recoverer - sends failed messages to DLT
+
+        /* DeadLetterPublishingRecoverer class here is a spring apache kafka library used to send failed messages to dead letter topics
+         kafkaTemplate will actually be used to send bad/dead messages to dead letter topics. because kafkaTemplate robs kafka producer and provide method to send producer messages to kafka topic.
+         since kafkaTemplate knows how to send kafka messages to kafka topic, it is perfect tool for DeadLetterPublishingRecoverer to use when it need to send failed
+         messages to dead letter topic*/
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
+                (consumerRecord, exception) -> {
+                    // DLT naming strategy: original-topic-name.DLT
+                    String deadLetterTopic = consumerRecord.topic() + ".DLT";
+                    return new TopicPartition(deadLetterTopic, consumerRecord.partition());
+                });
         
-        // Optionally, you can add specific exception handling
+        /*use dead letter publishing recovery to publish failed messages to dead letter topics while error occur during message consumption by kafka listener.
+         Retry 3 times with 1 second delay between retries, then publish to DLT*/
+        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3L));
+        
+        // Optionally, you can add exceptions that should NOT be retried (go straight to DLT)
         // handler.addNotRetryableExceptions(JsonProcessingException.class);
         
         return handler;

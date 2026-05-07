@@ -1,5 +1,7 @@
 package com.example.monir.EmailNotificationService.config;
 
+import com.example.monir.EmailNotificationService.error.NotRetryableException;
+import com.example.monir.EmailNotificationService.error.RetryableException;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -19,6 +21,7 @@ import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
 import org.springframework.kafka.support.serializer.JacksonJsonSerializer;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.util.backoff.FixedBackOff;
+import org.springframework.web.client.HttpServerErrorException;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -98,8 +101,9 @@ public class KafkaConsumerConfiguration {
         
         /*use dead letter publishing recovery to publish failed messages to dead letter topics while error occur during message consumption by kafka listener.
          Retry 3 times with 1 second delay between retries, then publish to DLT*/
-        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 3L));
-        
+        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, new FixedBackOff(3000L, 3L));
+        handler.addNotRetryableExceptions(NotRetryableException.class);
+        handler.addRetryableExceptions(RetryableException.class);
         // Optionally, you can add exceptions that should NOT be retried (go straight to DLT)
         // handler.addNotRetryableExceptions(JsonProcessingException.class);
         

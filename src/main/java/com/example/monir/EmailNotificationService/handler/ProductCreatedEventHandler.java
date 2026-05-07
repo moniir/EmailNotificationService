@@ -1,43 +1,58 @@
 package com.example.monir.EmailNotificationService.handler;
 
 import com.example.mhb.core.ProductCreatedEvent;
+import com.example.monir.EmailNotificationService.error.NotRetryableException;
+import com.example.monir.EmailNotificationService.error.RetryableException;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.kafka.annotation.KafkaHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.kafka.support.serializer.DeserializationException;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestTemplate;
 
 @Component
+@KafkaListener(topics = {"product-created-event-topic"})
+/*    @KafkaListener(topics = {"product-created-event-topic","anc-topic"})
+      a single kafka consumer can consume messages from multiple topics
+*/
 public class ProductCreatedEventHandler {
 
     private final Logger LOGGER = LoggerFactory.getLogger(this.getClass());
+    private RestTemplate restTemplate;
 
-/*    @KafkaListener(topics = {"product-created-event-topic","anc-topic"})
-    a single kafka consumer can consume messages from multiple topics
-     */
-    @KafkaListener(topics = {"product-created-event-topic"})
-    public void handle(
-            @Payload ProductCreatedEvent event,
-            @Header(value = KafkaHeaders.RECEIVED_TOPIC, required = false) String topic,
-            @Header(value = KafkaHeaders.RECEIVED_PARTITION, required = false) Integer partition,
-            @Header(value = KafkaHeaders.OFFSET, required = false) Long offset,
-            @Header(value = KafkaHeaders.EXCEPTION_MESSAGE, required = false) String exceptionMessage){
-        
-        // Check if there was a deserialization error
-        if (exceptionMessage != null) {
-            LOGGER.error("Deserialization error from topic: {}, partition: {}, offset: {}. Error: {}", 
-                    topic, partition, offset, exceptionMessage);
-            // Handle the error (e.g., log to dead letter queue, send alert, etc.)
-            return;
+    public ProductCreatedEventHandler(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+    @KafkaHandler
+    public void handle(ProductCreatedEvent event){
+        LOGGER.info("Received a new event: ", event.getTitle());
+        String reqUrl = "http://localhost:8888/response/200"; //tested using mock application
+        try {
+            ResponseEntity<String> response = restTemplate.exchange(reqUrl, HttpMethod.GET, null, String.class);
+            if(response.getStatusCode().value() == HttpStatus.OK.value()){
+                LOGGER.info("Received response from a remote service: "+response.getBody());
+            }
+        } catch (ResourceAccessException ex) {
+            LOGGER.error(ex.getMessage());
+            throw new RetryableException(ex);
+        } catch (HttpServerErrorException ex) {
+            LOGGER.error(ex.getMessage());
+            throw new NotRetryableException(ex);
+        } catch (Exception ex) {
+            LOGGER.error(ex.getMessage());
+            throw new NotRetryableException(ex);
         }
-        
-        LOGGER.info("Received a new event: {} from topic: {}, partition: {}, offset: {}", 
-                event.getTitle(), topic, partition, offset);
-        
-        // Process the event (send email notification, etc.)
+
     }
 }

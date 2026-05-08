@@ -36,7 +36,7 @@ public class ProductCreatedEventHandler {
 
     @KafkaHandler
     public void handle(ProductCreatedEvent event){
-        LOGGER.info("Received a new event: ", event.getTitle());
+        LOGGER.info("Received a new event: " + event.getTitle());
         String reqUrl = "http://localhost:8888/response/200"; //tested using mock application
         try {
             ResponseEntity<String> response = restTemplate.exchange(reqUrl, HttpMethod.GET, null, String.class);
